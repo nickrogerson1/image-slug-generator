@@ -178,12 +178,12 @@ impl SheetBridge {
         Ok(out)
     }
 
-    async fn write_to_column_i(&self, values_by_row_1_based: Vec<(usize, String)>) -> Result<()> {
+    async fn write_to_column(&self, column: &str, values_by_row_1_based: Vec<(usize, String)>) -> Result<()> {
         let mut data: Vec<ValueRange> = Vec::with_capacity(values_by_row_1_based.len());
 
         for (row, value) in values_by_row_1_based {
             data.push(ValueRange {
-                range: Some(format!("{}!I{}", self.tab_name, row)),
+                range: Some(format!("{}!{}{}", self.tab_name, column, row)),
                 values: Some(vec![vec![json!(value)]]),
                 ..Default::default()
             });
@@ -223,13 +223,23 @@ async fn main() -> Result<()> {
     let sheet_tab = env::var("GOOGLE_SHEET_TAB").unwrap_or_else(|_| "Sheet1".to_string());
     let creds_path = env::var("GOOGLE_APPLICATION_CREDENTIALS")
         .context("GOOGLE_APPLICATION_CREDENTIALS missing")?;
+    let trigger_column = env::var("GOOGLE_SHEET_TRIGGER_COLUMN")
+        .context("GOOGLE_SHEET_TRIGGER_COLUMN missing")?
+        .to_uppercase();
+    let snippet_column = env::var("GOOGLE_SHEET_SNIPPET_COLUMN")
+        .context("GOOGLE_SHEET_SNIPPET_COLUMN missing")?
+        .to_uppercase();
+    let slug_column = env::var("GOOGLE_SHEET_SLUG_COLUMN")
+        .context("GOOGLE_SHEET_SLUG_COLUMN missing")?
+        .to_uppercase();
 
     let sheet = SheetBridge::new(spreadsheet_id, sheet_tab, creds_path).await?;
 
-    // Column D is the trigger; column E supplies snippets; column I holds existing slugs.
-    let col_d = sheet.read_column("D:D").await?;
-    let col_e = sheet.read_column("E:E").await?;
-    let col_i = sheet.read_column("I:I").await?;
+    // The trigger column gates row processing; the snippet column feeds the
+    // slug generator; the slug column holds existing/generated slugs.
+    let col_d = sheet.read_column(&format!("{trigger_column}:{trigger_column}")).await?;
+    let col_e = sheet.read_column(&format!("{snippet_column}:{snippet_column}")).await?;
+    let col_i = sheet.read_column(&format!("{slug_column}:{slug_column}")).await?;
 
     // Build frequency map from column E (skipping header row).
     let snippets_no_header: Vec<String> = col_e.iter().skip(1).cloned().collect();
@@ -250,7 +260,7 @@ async fn main() -> Result<()> {
         let trigger = col_d.get(idx0).map(|s| s.trim()).unwrap_or("");
         if trigger.is_empty() {
             skipped_no_trigger += 1;
-            continue; // nothing in column D -> do not generate
+            continue; // nothing in the trigger column -> do not generate
         }
 
         let existing_slug = col_i.get(idx0).map(|s| s.trim()).unwrap_or("");
@@ -265,11 +275,11 @@ async fn main() -> Result<()> {
         generated_count += 1;
     }
 
-    sheet.write_to_column_i(updates).await?;
+    sheet.write_to_column(&slug_column, updates).await?;
 
     println!("Generated {generated_count} new slugs.");
     println!("Skipped {skipped_existing} rows because slugs already existed.");
-    println!("Skipped {skipped_no_trigger} rows because column D was empty.");
+    println!("Skipped {skipped_no_trigger} rows because the trigger column was empty.");
 
     Ok(())
 }
