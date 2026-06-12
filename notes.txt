@@ -1,0 +1,5 @@
+I need to modify this script so that it checks first to see if 
+there is already an existing slug in col I. If there is, then it should skip it.
+
+Return the full updated script.
+
